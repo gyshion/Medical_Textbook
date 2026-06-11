@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Medical Textbooks</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --ink: #1f2933;
+    --muted: #6b7280;
+    --line: #e3e8ef;
+    --accent: #b3122c;        /* First Aid red */
+    --accent-soft: #fbe9ec;
+    --shadow: 0 1px 3px rgba(16,24,40,.08), 0 1px 2px rgba(16,24,40,.06);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.5;
+  }
+  header {
+    background: linear-gradient(135deg, #8c0d22, var(--accent));
+    color: #fff;
+    padding: 36px 20px 30px;
+    text-align: center;
+  }
+  header h1 { margin: 0 0 6px; font-size: 1.9rem; letter-spacing: .2px; }
+  header p { margin: 0; opacity: .9; font-size: .98rem; }
+  main { max-width: 880px; margin: 0 auto; padding: 22px 16px 60px; }
+
+  .toolbar { margin: 4px 0 20px; }
+  #filter {
+    width: 100%;
+    padding: 12px 14px;
+    font-size: 1rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+  }
+  #filter:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+
+  .book {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    margin-bottom: 18px;
+    overflow: hidden;
+  }
+  .book > .book-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 18px 20px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .book-head .icon { font-size: 2rem; line-height: 1; }
+  .book-head .meta { flex: 1; min-width: 0; }
+  .book-head .title { font-size: 1.18rem; font-weight: 650; }
+  .book-head .sub { color: var(--muted); font-size: .9rem; }
+  .chev { color: var(--muted); transition: transform .2s ease; font-size: 1rem; }
+  .open > .book-head .chev { transform: rotate(90deg); }
+
+  .chapters { display: none; padding: 0 14px 12px; }
+  .open > .chapters { display: block; }
+
+  .subject { border-top: 1px solid var(--line); }
+  .subject-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 8px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .subject-head .name { flex: 1; font-weight: 600; font-size: .98rem; }
+  .subject-head .count {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    font-size: .76rem;
+    font-weight: 600;
+    padding: 2px 9px;
+  }
+  .subject-head .chev { font-size: .85rem; }
+  .subject.open > .subject-head .chev { transform: rotate(90deg); }
+
+  .sections { display: none; padding: 2px 6px 12px 30px; }
+  .subject.open > .sections { display: block; }
+  .sections a {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    color: var(--ink);
+    text-decoration: none;
+    font-size: .95rem;
+  }
+  .sections a:hover { background: var(--accent-soft); color: var(--accent); }
+  .sections a::before { content: "\1F4C4"; font-size: .95rem; }
+
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+  footer { text-align: center; color: var(--muted); font-size: .82rem; padding: 20px; }
+  mark { background: #fff1a8; color: inherit; padding: 0 1px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Medical Textbooks</h1>
+  <p>Browse and open chapter PDFs in your browser</p>
+</header>
+
+<main>
+  <div class="toolbar">
+    <input id="filter" type="search" placeholder="Filter sections… (e.g. cardiac, renal, embryology)" autocomplete="off">
+  </div>
+  <div id="library"></div>
+  <p id="noresults" class="empty" hidden>No sections match your filter.</p>
+</main>
+
+<footer>Static site served via GitHub Pages · PDFs open in a new tab</footer>
+
+<script src="manifest.js"></script>
+<script>
+  const library = document.getElementById('library');
+  const filterBox = document.getElementById('filter');
+  const noResults = document.getElementById('noresults');
+
+  // Encode each path segment so spaces/commas in folder and file names resolve.
+  function href(path) {
+    return path.split('/').map(encodeURIComponent).join('/');
+  }
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function render(manifest) {
+    (manifest.textbooks || []).forEach(function (tb) {
+      const book = el('div', 'book');
+
+      const head = el('div', 'book-head');
+      head.appendChild(el('span', 'icon', tb.icon || '📘'));
+      const meta = el('div', 'meta');
+      meta.appendChild(el('div', 'title', tb.title));
+      meta.appendChild(el('div', 'sub',
+        [tb.edition, tb.sectionCount + ' sections'].filter(Boolean).join('  ·  ')));
+      head.appendChild(meta);
+      head.appendChild(el('span', 'chev', '❯'));
+      head.addEventListener('click', function () { book.classList.toggle('open'); });
+      book.appendChild(head);
+
+      const chapters = el('div', 'chapters');
+      (tb.chapters || []).forEach(function (ch) {
+        const subj = el('div', 'subject');
+
+        const sHead = el('div', 'subject-head');
+        sHead.appendChild(el('span', 'name', ch.subject));
+        sHead.appendChild(el('span', 'count', String(ch.sections.length)));
+        sHead.appendChild(el('span', 'chev', '❯'));
+        sHead.addEventListener('click', function () { subj.classList.toggle('open'); });
+        subj.appendChild(sHead);
+
+        const secs = el('div', 'sections');
+        ch.sections.forEach(function (sec) {
+          const a = el('a', null, sec.name);
+          a.href = href(sec.file);
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.dataset.name = sec.name.toLowerCase();
+          a.dataset.subject = ch.subject.toLowerCase();
+          secs.appendChild(a);
+        });
+        subj.appendChild(secs);
+        chapters.appendChild(subj);
+      });
+      book.appendChild(chapters);
+      library.appendChild(book);
+    });
+
+    // Open the first textbook by default.
+    const first = library.querySelector('.book');
+    if (first) first.classList.add('open');
+  }
+
+  // Live filter across all section names + subjects.
+  function applyFilter(q) {
+    q = q.trim().toLowerCase();
+    let anyVisible = false;
+
+    document.querySelectorAll('.subject').forEach(function (subj) {
+      let subjVisible = false;
+      subj.querySelectorAll('.sections a').forEach(function (a) {
+        const hit = !q || a.dataset.name.includes(q) || a.dataset.subject.includes(q);
+        a.style.display = hit ? '' : 'none';
+        if (hit) { subjVisible = true; anyVisible = true; }
+      });
+      subj.style.display = subjVisible ? '' : 'none';
+      // Expand matching subjects while filtering; collapse when cleared.
+      subj.classList.toggle('open', !!q && subjVisible);
+    });
+
+    // While filtering, keep textbooks expanded so matches are visible.
+    if (q) document.querySelectorAll('.book').forEach(function (book) {
+      book.classList.add('open');
+    });
+
+    noResults.hidden = anyVisible || !q;
+  }
+
+  if (window.MANIFEST) {
+    render(window.MANIFEST);
+  } else {
+    library.innerHTML = '<p class="empty">manifest.js not found. Run ' +
+      '<code>python generate_manifest.py</code>.</p>';
+  }
+
+  filterBox.addEventListener('input', function () { applyFilter(this.value); });
+</script>
+</body>
+</html>
