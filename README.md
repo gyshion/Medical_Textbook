@@ -33,6 +33,8 @@ Regenerate the search index whenever the PDFs change (added textbook, or after
 
 ## To add a textbook
 
+See **[ADDING_TEXTBOOKS.md](ADDING_TEXTBOOKS.md)** for the full step-by-step guide. In short:
+
 1. Drop the textbook's PDFs in a new folder (e.g. `Pathoma/PDFs`), named `Subject-Section.pdf`.
 2. Add an entry to the `TEXTBOOKS` list at the top of `generate_manifest.py`
    (`id`, `title`, `edition`, `icon`, `pdf_dir`).
