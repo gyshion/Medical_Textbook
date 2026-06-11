@@ -70,7 +70,24 @@
     background: var(--bg);
   }
   #filter:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
-  .nav { overflow-y: auto; padding: 6px 6px 24px; flex: 1 1 auto; }
+  .search-status { font-size: .76rem; color: var(--muted); padding: 6px 2px 0; min-height: 0; }
+  .search-status:empty { display: none; }
+  .scroll { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+  .tree, .results { padding: 6px 6px 24px; }
+
+  /* Search results */
+  .result {
+    display: block; width: 100%; text-align: left;
+    background: none; border: 0; cursor: pointer; font-family: inherit;
+    padding: 9px 10px; border-radius: 8px; border-bottom: 1px solid var(--line);
+  }
+  .result:hover { background: var(--accent-soft); }
+  .result .where { font-size: .82rem; font-weight: 650; color: var(--ink); }
+  .result .where .pg { color: var(--accent); font-weight: 600; }
+  .result .where .subj { color: var(--muted); font-weight: 400; }
+  .result .snip { font-size: .8rem; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+  .result .snip mark { background: #fff1a8; color: inherit; padding: 0 1px; border-radius: 2px; }
+  .no-hits { color: var(--muted); font-size: .85rem; padding: 14px 10px; }
 
   .book-head {
     display: flex; align-items: center; gap: 10px;
@@ -171,9 +188,13 @@
 <div class="layout">
   <aside class="sidebar" id="sidebar">
     <div class="filter-wrap">
-      <input id="filter" type="search" placeholder="Filter sections…" autocomplete="off">
+      <input id="filter" type="search" placeholder="Search content…" autocomplete="off">
+      <div class="search-status" id="searchStatus"></div>
     </div>
-    <nav class="nav" id="nav"></nav>
+    <div class="scroll">
+      <nav class="tree" id="nav"></nav>
+      <div class="results" id="results" hidden></div>
+    </div>
   </aside>
 
   <section class="viewer">
@@ -194,6 +215,8 @@
 <script src="manifest.js"></script>
 <script>
   const nav = document.getElementById('nav');
+  const results = document.getElementById('results');
+  const searchStatus = document.getElementById('searchStatus');
   const filterBox = document.getElementById('filter');
   const pdf = document.getElementById('pdf');
   const placeholder = document.getElementById('placeholder');
@@ -214,19 +237,25 @@
   }
 
   let activeBtn = null;
-  function openSection(btn, sec, subject) {
+  function setActive(btn) {
     if (activeBtn) activeBtn.classList.remove('active');
-    activeBtn = btn;
-    btn.classList.add('active');
+    activeBtn = btn || null;
+    if (btn) btn.classList.add('active');
+  }
 
-    const url = href(sec.file);
-    pdf.src = url;
+  // Load a PDF into the right pane, optionally jumping to a page.
+  function loadPdf(file, name, subject, page) {
+    const base = href(file);
+    const url = page ? base + '#page=' + page : base;
+    // Reset first so the viewer re-navigates even within the same file.
+    pdf.src = 'about:blank';
+    requestAnimationFrame(function () { pdf.src = url; });
     pdf.style.display = 'block';
     placeholder.classList.add('hidden');
 
     crumb.innerHTML = '';
-    crumb.appendChild(document.createTextNode(sec.name + ' '));
-    crumb.appendChild(el('span', 'sub', '· ' + subject));
+    crumb.appendChild(document.createTextNode(name + ' '));
+    crumb.appendChild(el('span', 'sub', '· ' + subject + (page ? ' · p.' + page : '')));
     popout.href = url;
     popout.hidden = false;
 
@@ -262,9 +291,10 @@
         const secs = el('div', 'sections');
         ch.sections.forEach(function (sec) {
           const btn = el('button', 'sec', sec.name);
-          btn.dataset.name = sec.name.toLowerCase();
-          btn.dataset.subject = ch.subject.toLowerCase();
-          btn.addEventListener('click', function () { openSection(btn, sec, ch.subject); });
+          btn.addEventListener('click', function () {
+            setActive(btn);
+            loadPdf(sec.file, sec.name, ch.subject);
+          });
           secs.appendChild(btn);
         });
         subj.appendChild(secs);
@@ -277,22 +307,6 @@
     });
   }
 
-  // Live filter across all section names + subjects.
-  function applyFilter(q) {
-    q = q.trim().toLowerCase();
-    document.querySelectorAll('.subject').forEach(function (subj) {
-      let subjVisible = false;
-      subj.querySelectorAll('.sec').forEach(function (btn) {
-        const hit = !q || btn.dataset.name.includes(q) || btn.dataset.subject.includes(q);
-        btn.style.display = hit ? '' : 'none';
-        if (hit) subjVisible = true;
-      });
-      subj.style.display = subjVisible ? '' : 'none';
-      subj.classList.toggle('open', !!q && subjVisible);
-    });
-    if (q) document.querySelectorAll('.book').forEach(function (b) { b.classList.add('open'); });
-  }
-
   if (window.MANIFEST) {
     render(window.MANIFEST);
   } else {
@@ -300,7 +314,120 @@
       'Run <code>python generate_manifest.py</code>.</p>';
   }
 
-  filterBox.addEventListener('input', function () { applyFilter(this.value); });
+  // ---- Full-text search (assets lazy-loaded on first use) ----
+  let mini = null, byId = null, miniReady = false, miniLoading = false;
+
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = function () { reject(new Error('failed to load ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function ensureSearch() {
+    if (miniReady || miniLoading) return Promise.resolve();
+    miniLoading = true;
+    searchStatus.textContent = 'Loading search index…';
+    return loadScript('minisearch.min.js')
+      .then(function () { return loadScript('search-docs.js'); })
+      .then(function () {
+        byId = window.SEARCH_DOCS;
+        mini = new MiniSearch({
+          fields: ['text', 'section', 'subject'],
+          storeFields: ['subject', 'section', 'file', 'page'],
+          searchOptions: { prefix: true, fuzzy: 0.2, boost: { section: 3, subject: 2 } }
+        });
+        mini.addAll(byId);
+        miniReady = true;
+        searchStatus.textContent = '';
+      })
+      .catch(function () { searchStatus.textContent = 'Search unavailable.'; })
+      .then(function () { miniLoading = false; });
+  }
+
+  function escapeReg(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  function snippetHTML(text, terms) {
+    const lower = text.toLowerCase();
+    let pos = -1;
+    terms.forEach(function (t) {
+      const i = lower.indexOf(t);
+      if (i >= 0 && (pos < 0 || i < pos)) pos = i;
+    });
+    if (pos < 0) pos = 0;
+    const start = Math.max(0, pos - 50);
+    let snip = text.slice(start, start + 170);
+    if (start > 0) snip = '…' + snip;
+    if (start + 170 < text.length) snip += '…';
+    let safe = snip.replace(/[&<>]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c];
+    });
+    if (terms.length) {
+      const re = new RegExp('(' + terms.map(escapeReg).join('|') + ')', 'gi');
+      safe = safe.replace(re, '<mark>$1</mark>');
+    }
+    return safe;
+  }
+
+  function renderResults(q, hits) {
+    nav.hidden = true;
+    results.hidden = false;
+    results.innerHTML = '';
+    if (!hits.length) {
+      searchStatus.textContent = '';
+      results.appendChild(el('div', 'no-hits', 'No matches for “' + q + '”.'));
+      return;
+    }
+    searchStatus.textContent = hits.length + (hits.length === 50 ? '+ results' :
+      (hits.length === 1 ? ' result' : ' results'));
+    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    hits.forEach(function (h) {
+      const btn = el('button', 'result');
+      const where = el('div', 'where');
+      where.appendChild(document.createTextNode(h.section + ' '));
+      where.appendChild(el('span', 'subj', '· ' + h.subject + ' '));
+      where.appendChild(el('span', 'pg', '· p.' + h.page));
+      btn.appendChild(where);
+      const snip = el('div', 'snip');
+      snip.innerHTML = snippetHTML(byId[h.id].text, terms);
+      btn.appendChild(snip);
+      btn.addEventListener('click', function () {
+        setActive(null);
+        loadPdf(h.file, h.section, h.subject, h.page);
+      });
+      results.appendChild(btn);
+    });
+    results.scrollTop = 0;
+  }
+
+  function showTree() {
+    results.hidden = true;
+    results.innerHTML = '';
+    nav.hidden = false;
+    searchStatus.textContent = '';
+  }
+
+  function runSearch(q) {
+    ensureSearch().then(function () {
+      if (!miniReady) return;
+      if (filterBox.value.trim() !== q) return; // a newer query superseded this one
+      renderResults(q, mini.search(q).slice(0, 50));
+    });
+  }
+
+  let searchTimer = null;
+  filterBox.addEventListener('input', function () {
+    const q = this.value.trim();
+    clearTimeout(searchTimer);
+    if (!q) { showTree(); return; }
+    searchTimer = setTimeout(function () { runSearch(q); }, 150);
+  });
+  // Warm up the index as soon as the user focuses the box.
+  filterBox.addEventListener('focus', ensureSearch, { once: true });
+
   menuBtn.addEventListener('click', function () { sidebar.classList.toggle('show'); });
 </script>
 </body>
