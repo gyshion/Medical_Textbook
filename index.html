@@ -229,6 +229,18 @@
   function href(path) {
     return path.split('/').map(encodeURIComponent).join('/');
   }
+
+  // Warm the browser cache so the PDF is (partly) downloaded before the click.
+  const prefetched = new Set();
+  function prefetch(file) {
+    const u = href(file);
+    if (prefetched.has(u)) return;
+    prefetched.add(u);
+    const link = document.createElement('link');
+    link.rel = 'prefetch';
+    link.href = u;
+    document.head.appendChild(link);
+  }
   function el(tag, cls, text) {
     const n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -244,12 +256,19 @@
   }
 
   // Load a PDF into the right pane, optionally jumping to a page.
+  let currentFile = null;
   function loadPdf(file, name, subject, page) {
     const base = href(file);
     const url = page ? base + '#page=' + page : base;
-    // Reset first so the viewer re-navigates even within the same file.
-    pdf.src = 'about:blank';
-    requestAnimationFrame(function () { pdf.src = url; });
+    if (file === currentFile) {
+      // Same document already open: reset so the viewer re-navigates (e.g. page jump).
+      pdf.src = 'about:blank';
+      requestAnimationFrame(function () { pdf.src = url; });
+    } else {
+      // Different document: load directly — avoids an extra blank navigation.
+      pdf.src = url;
+    }
+    currentFile = file;
     pdf.style.display = 'block';
     placeholder.classList.add('hidden');
 
@@ -291,6 +310,9 @@
         const secs = el('div', 'sections');
         ch.sections.forEach(function (sec) {
           const btn = el('button', 'sec', sec.name);
+          const warm = function () { prefetch(sec.file); };
+          btn.addEventListener('mouseenter', warm);
+          btn.addEventListener('touchstart', warm, { passive: true });
           btn.addEventListener('click', function () {
             setActive(btn);
             loadPdf(sec.file, sec.name, ch.subject);
@@ -394,6 +416,9 @@
       const snip = el('div', 'snip');
       snip.innerHTML = snippetHTML(byId[h.id].text, terms);
       btn.appendChild(snip);
+      const warm = function () { prefetch(h.file); };
+      btn.addEventListener('mouseenter', warm);
+      btn.addEventListener('touchstart', warm, { passive: true });
       btn.addEventListener('click', function () {
         setActive(null);
         loadPdf(h.file, h.section, h.subject, h.page);
